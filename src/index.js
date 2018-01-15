@@ -13,7 +13,8 @@ import {
   TouchableOpacity,
   ViewPagerAndroid,
   Platform,
-  ActivityIndicator
+  ActivityIndicator,
+  PanResponder,
 } from 'react-native'
 
 /**
@@ -193,6 +194,24 @@ export default class extends Component {
   autoplayTimer = null
   loopJumpTimer = null
 
+  componentWillMount () {
+    if (Platform.OS !== 'ios') {
+      const shouldSetResponder = (evt, gestureState) => this.props.horizontal
+        && (Math.abs(gestureState.vx) > Math.abs(gestureState.vy));
+      this._panResponder = PanResponder.create({
+        onStartShouldSetPanResponder: shouldSetResponder,
+        onStartShouldSetPanResponderCapture: shouldSetResponder,
+        onMoveShouldSetPanResponder: shouldSetResponder,
+        onMoveShouldSetPanResponderCapture: shouldSetResponder,
+        onPanResponderRelease: () => false,
+        onPanResponderTerminate: () => false,
+        // blocking nativeResponder makes it hard to scroll ViewPagerAndroid in a ScrollView
+        // I don't know how it works since I know little about java, but it did work in my case
+        onShouldBlockNativeResponder: () => false,
+      })
+    }
+  }
+
   componentWillReceiveProps (nextProps) {
     if (!nextProps.autoplay && this.autoplayTimer) clearTimeout(this.autoplayTimer)
     this.setState(this.initState(nextProps, this.props.index !== nextProps.index))
@@ -252,15 +271,31 @@ export default class extends Component {
       initState.height = height;
     }
 
+    // since defaultProps of index is 0
+    // when nextProps didnt contain index, initial offset would be { 0, 0 }
     initState.offset[initState.dir] = initState.dir === 'y'
-      ? height * props.index
-      : width * props.index
+      ? height * initState.index
+      : width * initState.index;
 
+    // fix render last page first when loop = true
+    if (props.loop) {
+      initState.offset[initState.dir] = initState.dir === 'y'
+        ? height * (initState.index + 1)
+        : width * (initState.index + 1);
+    }
+
+    if (state.total === initState.total && !props.updateIndex) {
+      // retain the offset
+      initState.offset = this.internals.offset;
+    }
 
     this.internals = {
       ...this.internals,
+      // update offset
+      offset: { ...initState.offset },
       isScrolling: false
     };
+
     return initState
   }
 
@@ -271,18 +306,24 @@ export default class extends Component {
 
   onLayout = (event) => {
     const { width, height } = event.nativeEvent.layout
-    const offset = this.internals.offset = {}
+    // if I have only one image as placeholder, and replace it when other images loaded,
+    // updateIndex would never be triggered until Carousel re-render;
+    // because initial offset is undefined when children.length === 1
+    // offset[dir] minus internals.offset[dir] would be NaN,
+    // function updateIndex would return immediately.
+    const offset = this.internals.offset
     const state = { width, height }
 
-    if (this.state.total > 1) {
-      let setup = this.state.index
-      if (this.props.loop) {
-        setup++
-      }
-      offset[this.state.dir] = this.state.dir === 'y'
-        ? height * setup
-        : width * setup
-    }
+    // seems unnecessary
+    // if (this.state.total > 1) {
+    //   let setup = this.state.index
+    //   if (this.props.loop) {
+    //     setup++
+    //   }
+    //   offset[this.state.dir] = this.state.dir === 'y'
+    //     ? height * setup
+    //     : width * setup
+    // }
 
     // only update the offset in state if needed, updating offset while swiping
     // causes some bad jumping / stuttering
@@ -432,16 +473,8 @@ export default class extends Component {
       // Setting the offset to the same thing will not do anything,
       // so we increment it by 1 then immediately set it to what it should be,
       // after render.
-      if (offset[dir] === this.internals.offset[dir]) {
-        newState.offset = { x: 0, y: 0 }
-        newState.offset[dir] = offset[dir] + 1
-        this.setState(newState, () => {
-          this.setState({ offset: offset }, cb)
-        })
-      } else {
-        newState.offset = offset
-        this.setState(newState, cb)
-      }
+      newState.offset = offset
+      this.setState(newState, cb)
     } else {
       this.setState(newState, cb)
     }
@@ -520,7 +553,7 @@ export default class extends Component {
    * @return {object} react-dom
    */
   renderPagination = () => {
-     // By default, dots only show when `total` >= 2
+    // By default, dots only show when `total` >= 2
     if (this.state.total <= 1) return null
 
     let dots = []
@@ -553,9 +586,9 @@ export default class extends Component {
 
     return (
       <View pointerEvents='none' style={[styles['pagination_' + this.state.dir], this.props.paginationStyle]}>
-        {dots}
-      </View>
-    )
+    {dots}
+  </View>
+  )
   }
 
   renderTitle = () => {
@@ -563,9 +596,9 @@ export default class extends Component {
     const title = child && child.props && child.props.title
     return title
       ? (<View style={styles.title}>
-        {this.props.children[this.state.index].props.title}
-      </View>)
-      : null
+    {this.props.children[this.state.index].props.title}
+  </View>)
+  : null
   }
 
   renderNextButton = () => {
@@ -578,14 +611,14 @@ export default class extends Component {
 
     return (
       <TouchableOpacity
-        onPress={() => button !== null && this.scrollBy(1)}
-        disabled={this.props.disableNextButton}
-      >
-        <View>
-          {button}
-        </View>
-      </TouchableOpacity>
-    )
+    onPress={() => button !== null && this.scrollBy(1)}
+    disabled={this.props.disableNextButton}
+  >
+  <View>
+    {button}
+    </View>
+    </TouchableOpacity>
+  )
   }
 
   renderPrevButton = () => {
@@ -597,23 +630,23 @@ export default class extends Component {
 
     return (
       <TouchableOpacity onPress={() => button !== null && this.scrollBy(-1)}>
-        <View>
-          {button}
-        </View>
-      </TouchableOpacity>
-    )
+  <View>
+    {button}
+    </View>
+    </TouchableOpacity>
+  )
   }
 
   renderButtons = () => {
     return (
       <View pointerEvents='box-none' style={[styles.buttonWrapper, {
-        width: this.state.width,
+      width: this.state.width,
         height: this.state.height
-      }, this.props.buttonWrapperStyle]}>
-        {this.renderPrevButton()}
-        {this.renderNextButton()}
-      </View>
-    )
+    }, this.props.buttonWrapperStyle]}>
+    {this.renderPrevButton()}
+    {this.renderNextButton()}
+  </View>
+  )
   }
 
   refScrollView = view => {
@@ -624,28 +657,30 @@ export default class extends Component {
     if (Platform.OS === 'ios') {
       return (
         <ScrollView ref={this.refScrollView}
-          {...this.props}
-          {...this.scrollViewPropOverrides()}
-          contentContainerStyle={[styles.wrapperIOS, this.props.style]}
-          contentOffset={this.state.offset}
-          onScrollBeginDrag={this.onScrollBegin}
-          onMomentumScrollEnd={this.onScrollEnd}
-          onScrollEndDrag={this.onScrollEndDrag}
-          style={this.props.scrollViewStyle}>
-          {pages}
-        </ScrollView>
-       )
+      {...this.props}
+      {...this.scrollViewPropOverrides()}
+      contentContainerStyle={[styles.wrapperIOS, this.props.style]}
+      contentOffset={this.state.offset}
+      onScrollBeginDrag={this.onScrollBegin}
+      onMomentumScrollEnd={this.onScrollEnd}
+      onScrollEndDrag={this.onScrollEndDrag}
+      style={this.props.scrollViewStyle}>
+      {pages}
+    </ScrollView>
+    )
     }
     return (
       <ViewPagerAndroid ref={this.refScrollView}
-        {...this.props}
-        initialPage={this.props.loop ? this.state.index + 1 : this.state.index}
-        onPageSelected={this.onScrollEnd}
-        key={pages.length}
-        style={[styles.wrapperAndroid, this.props.style]}>
-        {pages}
-      </ViewPagerAndroid>
-    )
+    {...this.props}
+    initialPage={this.props.loop ? this.state.index + 1 : this.state.index}
+    onPageSelected={this.onScrollEnd}
+    key={pages.length}
+    style={[styles.wrapperAndroid, this.props.style]}
+    {...this._panResponder.panHandlers}
+  >
+    {pages}
+  </ViewPagerAndroid>
+  )
   }
 
   /**
@@ -703,9 +738,9 @@ export default class extends Component {
           } else {
             return (
               <View style={pageStyleLoading} key={i}>
-                {loadMinimalLoader ? loadMinimalLoader : <ActivityIndicator />}
-              </View>
-            )
+              {loadMinimalLoader ? loadMinimalLoader : <ActivityIndicator />}
+          </View>
+          )
           }
         } else {
           return <View style={pageStyle} key={i}>{children[page]}</View>
@@ -717,13 +752,13 @@ export default class extends Component {
 
     return (
       <View style={[styles.container, containerStyle]} onLayout={this.onLayout}>
-        {this.renderScrollView(pages)}
-        {showsPagination && (renderPagination
-          ? renderPagination(index, total, this)
-          : this.renderPagination())}
-        {this.renderTitle()}
-        {showsButtons && this.renderButtons()}
-      </View>
-    )
+    {this.renderScrollView(pages)}
+    {showsPagination && (renderPagination
+      ? renderPagination(index, total, this)
+      : this.renderPagination())}
+    {this.renderTitle()}
+    {showsButtons && this.renderButtons()}
+  </View>
+  )
   }
 }
